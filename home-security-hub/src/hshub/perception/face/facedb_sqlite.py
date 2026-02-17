@@ -7,12 +7,14 @@ import sqlite3
 import time
 from datetime import datetime
 from datetime import timezone
+from typing import Callable
 
 import numpy as np
 
 from hshub.types import MatchResult
 
 LOGGER = logging.getLogger(__name__)
+FlushEventHook = Callable[[str, int, float, bool], None]
 
 
 def now_iso() -> str:
@@ -60,6 +62,7 @@ class FaceDBIndex:
         commit_every_n: int,
         commit_every_sec: float,
         centroid_alpha: float,
+        flush_event_hook: FlushEventHook | None = None,
     ) -> None:
         self.db_path = db_path
         self.match_threshold = float(match_threshold)
@@ -67,6 +70,7 @@ class FaceDBIndex:
         self.commit_every_n = max(1, int(commit_every_n))
         self.commit_every_sec = max(0.1, float(commit_every_sec))
         self.centroid_alpha = float(np.clip(centroid_alpha, 0.0, 1.0))
+        self.flush_event_hook = flush_event_hook
 
         self.conn = sqlite3.connect(self.db_path, timeout=30.0)
         self.conn.execute("PRAGMA journal_mode=WAL")
@@ -134,12 +138,21 @@ class FaceDBIndex:
 
     def _flush_if_needed(self, force: bool = False) -> None:
         elapsed = time.monotonic() - self.last_commit_monotonic
-        should_flush = force or self.pending_ops >= self.commit_every_n
-        if not should_flush and self.pending_ops > 0 and elapsed >= self.commit_every_sec:
+        flush_reason = ""
+        should_flush = False
+        if force:
             should_flush = True
+            flush_reason = "force"
+        elif self.pending_ops >= self.commit_every_n:
+            should_flush = True
+            flush_reason = "ops"
+        elif self.pending_ops > 0 and elapsed >= self.commit_every_sec:
+            should_flush = True
+            flush_reason = "time"
         if not should_flush:
             return
 
+        pending_ops_before_flush = self.pending_ops
         if self.pending_updates:
             rows = [
                 (embedding_to_blob(embedding), ts, person_id)
@@ -152,6 +165,13 @@ class FaceDBIndex:
             self.conn.commit()
             self.pending_ops = 0
             self.last_commit_monotonic = time.monotonic()
+            if self.flush_event_hook is not None:
+                self.flush_event_hook(
+                    flush_reason,
+                    pending_ops_before_flush,
+                    elapsed,
+                    force,
+                )
 
     def flush(self) -> None:
         self._flush_if_needed(force=True)
@@ -179,7 +199,9 @@ class FaceDBIndex:
         self.names.append(name)
         self.id_to_index[int(person_id)] = len(self.names) - 1
 
-    def find_best_match(self, face_embedding: np.ndarray) -> MatchResult | None:
+    def _score_embedding(
+        self, face_embedding: np.ndarray
+    ) -> tuple[int, float, float] | None:
         if self.embedding_matrix.size == 0:
             return None
 
@@ -195,11 +217,20 @@ class FaceDBIndex:
             second_score = float(top2[0])
         else:
             second_score = -1.0
+        return best_idx, best_score, second_score
 
+    def find_best_match_with_scores(
+        self, face_embedding: np.ndarray
+    ) -> tuple[MatchResult | None, float, float]:
+        scored = self._score_embedding(face_embedding)
+        if scored is None:
+            return None, float("nan"), float("nan")
+
+        best_idx, best_score, second_score = scored
         if best_score < self.match_threshold:
-            return None
-        if similarities.size > 1 and (best_score - second_score) < self.margin:
-            return None
+            return None, best_score, second_score
+        if second_score >= 0.0 and (best_score - second_score) < self.margin:
+            return None, best_score, second_score
 
         person_id = int(self.person_ids[best_idx])
         return MatchResult(
@@ -207,7 +238,11 @@ class FaceDBIndex:
             name=self.names[best_idx],
             best_score=best_score,
             second_score=second_score,
-        )
+        ), best_score, second_score
+
+    def find_best_match(self, face_embedding: np.ndarray) -> MatchResult | None:
+        match, _, _ = self.find_best_match_with_scores(face_embedding)
+        return match
 
     def insert_new_person(self, embedding: np.ndarray) -> MatchResult:
         norm_embedding = normalize_embedding(embedding)
@@ -231,18 +266,20 @@ class FaceDBIndex:
             second_score=-1.0,
         )
 
-    def update_seen(self, person_id: int, embedding: np.ndarray) -> None:
+    def update_seen(self, person_id: int, embedding: np.ndarray) -> float:
         idx = self.id_to_index.get(person_id)
         if idx is None:
-            return
+            return float("nan")
 
         query = normalize_embedding(embedding)
         current = self.embedding_matrix[idx]
         updated = normalize_embedding(
             ((1.0 - self.centroid_alpha) * current) + (self.centroid_alpha * query)
         )
+        delta_l2 = float(np.linalg.norm(updated - current))
         self.embedding_matrix[idx] = updated
 
         self.pending_updates[person_id] = (updated, now_iso())
         self.pending_ops += 1
         self._flush_if_needed()
+        return delta_l2

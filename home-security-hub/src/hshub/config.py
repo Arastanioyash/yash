@@ -26,6 +26,10 @@ class RuntimeConfig:
     new_person_save_delay_sec: float = 2.0
     pending_new_sim_threshold: float = 0.60
     pending_new_stale_sec: float = 2.0
+    min_blur_laplacian_var: float = 60.0
+    blur_gaussian_kernel: int = 5
+    blur_gaussian_sigma: float = 0.0
+    tuning_log_path: str | None = "artifacts/tuning_events.csv"
     display_width: int = 1280
     display_height: int = 720
     window_name: str = "Face Recognition + DB"
@@ -61,6 +65,14 @@ class RuntimeConfig:
             raise ValueError("pending_new_sim_threshold must be in [0, 1].")
         if self.pending_new_stale_sec <= 0.0:
             raise ValueError("pending_new_stale_sec must be > 0.")
+        if self.min_blur_laplacian_var < 0.0:
+            raise ValueError("min_blur_laplacian_var must be >= 0.")
+        if self.blur_gaussian_kernel < 1:
+            raise ValueError("blur_gaussian_kernel must be >= 1.")
+        if self.blur_gaussian_sigma < 0.0:
+            raise ValueError("blur_gaussian_sigma must be >= 0.")
+        if self.tuning_log_path is not None and not self.tuning_log_path.strip():
+            raise ValueError("tuning_log_path cannot be empty when set.")
         if self.display_width < 1 or self.display_height < 1:
             raise ValueError("display dimensions must be >= 1.")
         if self.fallback_webcam_index < 0:

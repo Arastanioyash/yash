@@ -15,6 +15,11 @@ dependencies = [
   "insightface",
 ]
 
+[project.optional-dependencies]
+tuning = [
+  "matplotlib",
+]
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 
