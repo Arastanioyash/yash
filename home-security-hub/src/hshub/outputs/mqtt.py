@@ -1,0 +1,1 @@
+"""MQTT notifier implementation."""

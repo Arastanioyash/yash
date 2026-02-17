@@ -1,0 +1,1 @@
+"""Local sound output notifier."""
