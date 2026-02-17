@@ -1,0 +1,1 @@
+"""Webhook notifier implementation."""

@@ -1,0 +1,13 @@
+name: hshub
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10
+  - pip
+  - numpy
+  - opencv
+  - pytorch
+  - pip:
+      - insightface
+      - -e .

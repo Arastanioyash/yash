@@ -1,0 +1,3 @@
+app_name: home-security-hub
+mode: production
+video_source: rtsp://user:pass@camera/stream
